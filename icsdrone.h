@@ -261,6 +261,8 @@ typedef struct {
   char chessVariant[30+1];
   Bool noCastle;
   int engineMovesPlayed;
+  Bool isBughouse;
+  char bughousePartner[30+1];
 } RunData;
 
 /* AppData */
@@ -319,6 +321,8 @@ typedef struct {
     char * feedbackCommand;
     Bool engineQuiet;
     char * variants;
+    Bool useMoveList;
+    Bool acceptPartnership;
 } AppData;
 
 extern PersistentData  persistentData;

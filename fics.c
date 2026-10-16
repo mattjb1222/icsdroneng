@@ -572,11 +572,16 @@ Bool EngineToMove(IcsBoard * icsBoard){
 }
 
 
+static uint64 lastBoardHash = 0;
+static int lastBoardMoveNum = -1;
+static Bool lastBoardHashSet = FALSE;
+
 void HandleBoard(IcsBoard * icsBoard, char *moveList, Bool ignoreMove){
   move_t move;
   book_move_t bmove;
   int whitetime,blacktime;
   int flagtime;
+  uint64 thisHash;
   if (runData.sigint && (icsBoard->status != -1)) InterruptComputer();
   if(!EngineToMove(icsBoard) && (icsBoard->nextMoveNum==1)){
     logme(LOG_INFO,"Setting up automatic abort in 60 seconds.");
@@ -609,6 +614,23 @@ void HandleBoard(IcsBoard * icsBoard, char *moveList, Bool ignoreMove){
     whitetime=100*icsBoard->whitetime;
     blacktime=100*icsBoard->blacktime;
     SendTimeToComputer(whitetime, blacktime);
+
+    /* If the server re-sends the SAME position (same board hash AND same
+     * move number) while it is still our turn, do NOT re-process it.
+     * Re-sending the detected move to the engine makes the engine reject it
+     * as "Illegal move", after which icsdrone bails out and resigns.
+     * (FatICS re-sends the board on holding/clock sync events.) */
+    thisHash = hash_key(icsBoard);
+    if (lastBoardHashSet &&
+        thisHash == lastBoardHash &&
+        icsBoard->nextMoveNum == lastBoardMoveNum) {
+      logme(LOG_DEBUG, "Duplicate board (no new move); skipping re-send.");
+      return;
+    }
+    lastBoardHash = thisHash;
+    lastBoardMoveNum = icsBoard->nextMoveNum;
+    lastBoardHashSet = TRUE;
+
     book_move(icsBoard,&bmove,TRUE);
     if(strcmp(bmove.move,"none")){
       Force();
@@ -757,6 +779,11 @@ Bool IsFicsShuffle(char *icsvariant){
 
 Bool UseMoveList(){
     int ret;
+    ret=appData.useMoveList;
+    if (!ret) {
+	logme(LOG_INFO,"Not using move lists; relying on board updates.\n");
+	return FALSE;
+    }
     ret=TRUE;
     if (runData.longAlgMoves && runData.icsType!=ICS_FICS) {
 	/* only FICS has the (undocumented) command "moves l" */
@@ -919,7 +946,7 @@ Bool ProcessLogin(char *line){
 	char *variants;
 	switch(runData.icsType){
 	case ICS_FICS:
-	    variants="lightning,blitz,standard,wild/0=wildcastle,wild/1=wildcastle,wild/fr=fischerandom,wild=nocastle,suicide=suicide,losers=losers,atomic=atomic,crazyhouse=crazyhouse,odds,eco,nic,uwild=nocastle,pawns,misc";
+	    variants="lightning,blitz,standard,wild/0=wildcastle,wild/1=wildcastle,wild/fr=fischerandom,wild=nocastle,suicide=suicide,losers=losers,atomic=atomic,crazyhouse=crazyhouse,bughouse=bughouse,odds,eco,nic,uwild=nocastle,pawns,misc";
 	    break;
 	case ICS_ICC:
 	    /* This is currently not tested! */
@@ -1092,6 +1119,18 @@ Bool ProcessOffers(char *line){
     }
     return TRUE;
   } 
+  if (sscanf(line, "%30s offers to be your bughouse partner%c", name, &dummy) == 2) {
+      Feedback(mask, "Partnership offer from %s.", name);
+      /* Remember the partner name so we can tell the engine who the
+       * partner is when a bughouse game starts. */
+      strncpy(runData.bughousePartner, name, sizeof(runData.bughousePartner)-1);
+      runData.bughousePartner[sizeof(runData.bughousePartner)-1]='\0';
+      if (appData.acceptPartnership) {
+          logme(LOG_INFO, "Accepting partnership offer from %s.", name);
+          SendToIcs("accept %s\n", name);
+      }
+      return TRUE;
+  }
   if (sscanf(line, "%30s would like to abor%c", name, &dummy) == 2) {
     Feedback(mask,"%s would like to abort.",name);
         /*
@@ -1223,20 +1262,30 @@ Bool ProcessIncomingMatches(char *line){
   char rating2[30+1];
   char rated[30+1];
   char variant[30+1];
+  char variant2[30+1]="";
   char color[30+1];
   if(!runData.loggedIn) return FALSE;
   /*
    *  Accept incoming matches
    */
-  if ((sscanf(line, "Challenge: %30s (%30[^)])%30s (%30[^)])%30s%30s", 
-	      name,rating,name2,rating2,rated,variant) == 6)
+  if ((sscanf(line, "Challenge: %30s (%30[^)])%30s (%30[^)])%30s%30s%30s", 
+	      name,rating,name2,rating2,rated,variant,variant2) == 7)
       ||
-      (sscanf(line,"Challenge: %30s (%30[^)]) [%30[^]]] %30s (%30[^)])%30s%30s",
-              name,rating,color,name2,rating2,rated,variant)==7)){
+      (sscanf(line,"Challenge: %30s (%30[^)]) [%30[^]]] %30s (%30[^)])%30s%30s%30s%30s",
+              name,rating,color,name2,rating2,rated,variant,variant2)==8)){
       int i;
       /* More specific variant */
       char *line1;
       int found;
+      /* Some servers (e.g. fatICS) embed the time class in the
+       * challenge line ("unrated blitz crazyhouse 3 0"); skip over
+       * it, and treat a leading number ("unrated 3 0") as normal */
+      if (!strcmp(variant,"blitz") || !strcmp(variant,"lightning") ||
+          !strcmp(variant,"standard") || !strcmp(variant,"correspondence")) {
+          if (variant2[0]) strcpy(variant,variant2); else strcpy(variant,"normal");
+      } else if (variant[0]>='0' && variant[0]<='9') {
+          strcpy(variant,"normal");
+      }
       if((line1=strstr(line,"Loaded"))){
 	  sscanf(line1,"Loaded from %30[^. ]",variant);
       }
@@ -1538,6 +1587,7 @@ Bool ProcessStartOfGame(char *line){
   char name[30+1],name2[30+1],rating[30+1],rating2[30+1];
   char rated[30+1];
   char color[30+1];
+  char variant2[30+1]="";
   int time, inc;
   int i;
   if(!runData.loggedIn) return FALSE;
@@ -1545,6 +1595,19 @@ Bool ProcessStartOfGame(char *line){
    *  Detect start of game, find gametype and rating of opponent
    */
   if ((sscanf(line, 
+	     "Creating: %30s (%30[^)]) %30s (%30[^)]) %30s %30s %30s %d %d", 
+	     name, 
+	     rating, 
+	     name2, 
+	     rating2, 
+	     rated, 
+	     runData.icsVariant, 
+	     variant2, 
+	     &time, 
+	     &inc) == 9
+     && (!strcmp(runData.icsVariant,"blitz") || !strcmp(runData.icsVariant,"lightning") ||
+	 !strcmp(runData.icsVariant,"standard") || !strcmp(runData.icsVariant,"correspondence")))
+   || (sscanf(line, 
 	     "Creating: %30s (%30[^)]) %30s (%30[^)]) %30s %30s %d %d", 
 	     name, 
 	     rating, 
@@ -1554,6 +1617,20 @@ Bool ProcessStartOfGame(char *line){
 	     runData.icsVariant, 
 	     &time, 
 	     &inc) == 8)
+   || (sscanf(line, 
+	     "Creating: %30s (%30[^)]) [%30[^]]] %30s (%30[^)]) %30s %30s %30s %d %d", 
+	     name, 
+	     rating, 
+	     color, 
+	     name2, 
+	     rating2, 
+	     rated, 
+	     runData.icsVariant, 
+	     variant2, 
+	     &time, 
+	     &inc) == 10
+     && (!strcmp(runData.icsVariant,"blitz") || !strcmp(runData.icsVariant,"lightning") ||
+	 !strcmp(runData.icsVariant,"standard") || !strcmp(runData.icsVariant,"correspondence")))
    || (sscanf(line, 
 	     "Creating: %30s (%30[^)]) [%30[^]]] %30s (%30[^)]) %30s %30s %d %d", 
 	     name, 
@@ -1566,6 +1643,11 @@ Bool ProcessStartOfGame(char *line){
 	     &time, 
 	     &inc) == 9)
    ) {
+      /* some servers give "unrated blitz crazyhouse 3 0": move the
+       * real variant (after the time class) into place */
+      if (!strcmp(runData.icsVariant,"blitz") || !strcmp(runData.icsVariant,"lightning") ||
+          !strcmp(runData.icsVariant,"standard") || !strcmp(runData.icsVariant,"correspondence"))
+          strcpy(runData.icsVariant, variant2);
     logme(LOG_DEBUG, "Detected start of game: [%s] (%s) vs [%s] (%s) [%s] [%s] %d %d", 
 	  name, rating, name2, rating2,rated,runData.icsVariant,time,inc);
     runData.hideFromProxy=TRUE;
@@ -1623,6 +1705,17 @@ Bool ProcessStartOfGame(char *line){
     	}
     }
     logme(LOG_DEBUG,"Chess variant is now set to \"%s\"",runData.chessVariant);
+    if(!strcmp(runData.chessVariant,"bughouse")){
+	runData.isBughouse=TRUE;
+	if(runData.bughousePartner[0]){
+	    SendToComputer("partner %s\n",runData.bughousePartner);
+	    logme(LOG_INFO,"Telling engine the bughouse partner is %s.",runData.bughousePartner);
+	}else{
+	    logme(LOG_WARNING,"Bughouse game but no partner name known yet.");
+	}
+    }else{
+	runData.isBughouse=FALSE;
+    }
     runData.useMoveList=UseMoveList();
     if (!strcmp(name2, runData.handle)) {
 	SendToComputer("name %s\n", name);
@@ -1721,6 +1814,42 @@ Bool ProcessMoveList(char *line){
         }
     }
     return FALSE;
+}
+
+Bool ProcessBughouseHolding(char *line){
+  static char w[200+1];
+  static char b[200+1];
+  if(!runData.loggedIn) return FALSE;
+  if(!runData.inGame) return FALSE;
+  if(!runData.isBughouse) return FALSE;
+  /* FatICS sends "holding [<white>] [<black>]" to the players of a
+   * bughouse board after each move.  Forward it to the engine so it
+   * knows what pieces it (and its opponent) can drop. */
+  if(sscanf(line, "holding %200s %200s", w, b) == 2){
+    SendToComputer("holding %s %s\n", w, b);
+    logme(LOG_DEBUG,"Forwarding holding to engine: %s %s", w, b);
+    return TRUE;
+  }
+  return FALSE;
+}
+
+Bool ProcessPTell(char *line){
+  static char name[30+1];
+  static char msg[8192+1];
+  if(!runData.loggedIn) return FALSE;
+  /* FatICS delivers a partner tell as "<name> (your partner) tells you: <msg>".
+   * Forward it to the engine as "ptell <msg>" so a human partner can drive
+   * Sunsetter's human-control feature (sit/go/sitting/flag/abort/<move>). */
+  if(sscanf(line, "%30s (your partner) tells you: %8192[^\n\r]s", name, msg) == 2){
+    if(runData.isBughouse || runData.bughousePartner[0]){
+      SendToComputer("ptell %s\n", msg);
+      logme(LOG_DEBUG,"Forwarding ptell to engine: %s", msg);
+    }else{
+      logme(LOG_DEBUG,"Got ptell but not in a bughouse game; ignoring: %s", msg);
+    }
+    return TRUE;
+  }
+  return FALSE;
 }
 
 Bool ProcessBoard(char *line){
@@ -2150,6 +2279,7 @@ void ProcessIcsLine(char *line, char *queue){
   if(ProcessForwardingMarkers(line))goto finish;
   if(ProcessPings(line))goto finish;
   if(ProcessLogin(line))goto finish;
+  if(ProcessPTell(line))goto finish;
   if(ProcessTells(line))goto finish;
   if(ProcessNext(line))goto finish;
   if(ProcessPending(line))goto finish;
@@ -2162,6 +2292,7 @@ void ProcessIcsLine(char *line, char *queue){
   if(ProcessStandings(line)) goto finish;
   if(ProcessFlaggedOpponent(line))goto finish;
   if(ProcessStartOfGame(line))goto finish;
+  if(ProcessBughouseHolding(line))goto finish;
   if(ProcessIllegalMove(line))goto finish;
   if(ProcessMoreTime(line))goto finish;
   if(ProcessMoveList(line))goto finish;

@@ -382,6 +382,10 @@ void ParseEngineVariants(char *line){
     variant_list=strtok(line1," =\"");     /* NO */
     variant_list=strtok(NULL,"\""); /* Again! */
     evc=0;
+    /* always offer "normal" even if the engine does not list it,
+     * otherwise time-class words in challenge lines (blitz/standard)
+     * mapped to "normal" get rejected */
+    strncpy(runData.chessVariants[evc++],"normal",30);
     variant=strtok(variant_list," ,");
     while(variant){
 	if(evc==MAXENGINEVARIANTS){

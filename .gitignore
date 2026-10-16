@@ -1,0 +1,18 @@
+# --- autotools build artifacts ---
+Makefile
+*.o
+*.obj
+*.a
+icsdrone
+config.h
+config.log
+config.status
+stamp-h1
+.deps/
+.libs/
+*.pyc
+
+# --- icsdrone runtime output ---
+Guest*.txt
+guest.log
+*.log

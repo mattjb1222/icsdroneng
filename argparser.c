@@ -55,6 +55,8 @@ ArgList argList = {
     {"-owner",                ArgString, &appData.owner             , 0 },
     {"-console",              ArgBool,   &appData.console           , 0 },
     {"-easyMode",             ArgBool,   &appData.easyMode          , 1 },
+    {"-useMoveList",          ArgBool,   &appData.useMoveList       , 0 },
+    {"-acceptPartnership",    ArgBool,   &appData.acceptPartnership , 1 },
     {"-book",                 ArgString, &appData.book              , 0 },
     {"-program",              ArgString, &appData.program           , 0 },
     {"-sendGameEnd",          ArgString, &appData.sendGameEnd       , 1 },
