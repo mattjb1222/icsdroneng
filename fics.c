@@ -576,6 +576,32 @@ static uint64 lastBoardHash = 0;
 static int lastBoardMoveNum = -1;
 static Bool lastBoardHashSet = FALSE;
 
+Bool IsMyBoard(IcsBoard * icsBoard){
+  return (!strcmp(icsBoard->nameOfWhite, runData.handle) ||
+          !strcmp(icsBoard->nameOfBlack, runData.handle));
+}
+
+/* Should this board's move and clocks be fed to the engine?
+ * status -1 = our own last move (the engine already knows it).
+ * status  1 = new move by the opponent (normal chess) or by our partner
+ *            (bughouse).
+ * status  0 = normal chess: "not my game / observing" -> ignore.
+ *            bughouse (FatICS): "partner to move", or the game-history
+ *            replay sent when (re)joining an already started game -> feed,
+ *            unless it is an echo of our own move.  Without feeding the
+ *            replay, the engine keeps playing a phantom fresh game and
+ *            gets flagged while the real position moves on. */
+Bool ForwardBoard(IcsBoard * icsBoard){
+  if(icsBoard->status==-1) return FALSE;
+  if(icsBoard->status==1)  return TRUE;
+  if(runData.isBughouse && icsBoard->status==0){
+    if(icsBoard->lanMove[0] &&
+       !strcmp(icsBoard->lanMove, runData.lastSentMove)) return FALSE;
+    return TRUE;
+  }
+  return FALSE;
+}
+
 void HandleBoard(IcsBoard * icsBoard, char *moveList, Bool ignoreMove){
   move_t move;
   book_move_t bmove;
@@ -608,11 +634,14 @@ void HandleBoard(IcsBoard * icsBoard, char *moveList, Bool ignoreMove){
     Force();
     SendMovesToComputer(moveList);
   }
-  if(EngineToMove(icsBoard)){
+  if(ForwardBoard(icsBoard)){
     /* clear outstanding flag and abort alarms */
     CancelTimers();
-    whitetime=100*icsBoard->whitetime;
-    blacktime=100*icsBoard->blacktime;
+    /* Xboard's "time"/"otim" are in tenths of a second; the FICS clocks are
+     * in seconds, so multiply by 10 (not 100 - that made the engine believe
+     * it had 10x more time than it really has). */
+    whitetime=10*icsBoard->whitetime;
+    blacktime=10*icsBoard->blacktime;
     SendTimeToComputer(whitetime, blacktime);
 
     /* If the server re-sends the SAME position (same board hash AND same
@@ -1862,10 +1891,15 @@ Bool ProcessBoard(char *line){
   }      
   BoardToString(runData.lineBoard, &icsBoardCopy);
   if(!runData.inGame) return TRUE;
+  if(!IsMyBoard(&runData.icsBoard)) return TRUE;
   if(runData.icsBoard.status!=1 &&  runData.icsBoard.status!=-1){
-      return TRUE;
+      /* Bughouse: let FatICS's status-0 boards ("partner to move" and the
+       * game-history replay) through; ForwardBoard() decides what to feed.
+       * Normal chess: status 0 means "not my game / observing" -> ignore. */
+      if(!(runData.isBughouse && runData.icsBoard.status==0)) return TRUE;
   }
   if(runData.waitingForFirstBoard){
+    runData.lastSentMove[0]='\0';
     if (!strcmp(runData.icsBoard.nameOfWhite, runData.handle)) {
       logme(LOG_INFO, "I'm playing white.");
       runData.computerIsWhite = TRUE;

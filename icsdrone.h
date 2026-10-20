@@ -263,6 +263,10 @@ typedef struct {
   int engineMovesPlayed;
   Bool isBughouse;
   char bughousePartner[30+1];
+  /* Last move we sent to the ICS server.  Used to recognize echoes of our
+   * own moves on bughouse boards, which FatICS may mark with status 0
+   * instead of -1.  Must not be re-fed to the engine. */
+  char lastSentMove[64];
 } RunData;
 
 /* AppData */

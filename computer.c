@@ -441,6 +441,8 @@ void ProcessComputerLine(char *line, char *queue)
 	  SendToComputer("draw\n");
 	}
 	SendToIcs("%s\n", move);
+	strncpy(runData.lastSentMove, move, sizeof(runData.lastSentMove)-1);
+	runData.lastSentMove[sizeof(runData.lastSentMove)-1]='\0';
 	runData.registeredDrawOffer=FALSE;
 	validKibitzSeen=0;
       }
