@@ -80,7 +80,7 @@ ArgList argList = {
     {"-nice",                 ArgInt,    &appData.nice              , 0 },
     {"-pgnFile",              ArgString, &appData.pgnFile           , 0 },
     {"-pgnLogging",           ArgBool,   &appData.pgnLogging        , 1 },
-    {"-resign",               ArgBool,   &appData.resign            , 1 },
+    {"-resign",               ArgBool,   &appData.resign            , 0 },
     {"-scoreForWhite",        ArgBool,   &appData.scoreForWhite     , 1 },
     {"-shortLogFile",         ArgString, &appData.shortLogFile      , 0 },
     {"-shortLogging",         ArgBool,   &appData.shortLogging      , 1 },

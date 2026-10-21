@@ -200,7 +200,7 @@ AppData appData = {
 #endif
     NULL,            /* pgnFile */
     TRUE,            /* pgnLogging */
-    TRUE,            /* resign */
+    FALSE,           /* resign (off: eval-based auto-resign is unsound in bughouse, where a bad eval on one board is not fatal) */
     FALSE,           /* scoreForWhite */
     NULL,            /* shortLogFile */
     TRUE,            /* shortLogging */
