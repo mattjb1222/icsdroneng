@@ -1991,6 +1991,12 @@ Bool ProcessBoard(char *line){
 	runData.forceSetBoard=FALSE;
 	SendBoardToComputer(&runData.icsBoard,ignoreStartBoard);
 	SetupEngineOptions(&(runData.icsBoard));
+	/* Re-arm Go(): it only sends "go" when forceMode is set, and the
+	 * previous game's Go() already consumed it.  With the bughouse soft
+	 * reset (the engine survives between games) nothing else re-arms it,
+	 * so the first board of every new game would silently drop the "go"
+	 * and the engine that is white would wait forever. */
+	Force();
 	HandleBoard(&(runData.icsBoard),NULL,TRUE);
     }
     runData.waitingForFirstBoard = FALSE;
