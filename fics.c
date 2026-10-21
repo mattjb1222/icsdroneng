@@ -652,7 +652,8 @@ void HandleBoard(IcsBoard * icsBoard, char *moveList, Bool ignoreMove){
     thisHash = hash_key(icsBoard);
     if (lastBoardHashSet &&
         thisHash == lastBoardHash &&
-        icsBoard->nextMoveNum == lastBoardMoveNum) {
+        icsBoard->nextMoveNum == lastBoardMoveNum &&
+        !runData.forceSetBoard) {
       logme(LOG_DEBUG, "Duplicate board (no new move); skipping re-send.");
       return;
     }
@@ -1790,6 +1791,7 @@ Bool ProcessStartOfGame(char *line){
     /* update our state */
     runData.waitingForFirstBoard = TRUE;
     runData.engineMovesPlayed=0;
+    runData.illegalMoveCount=0;
     return TRUE;
   }
   /*
@@ -2391,8 +2393,25 @@ Bool ProcessIllegalMove(char *line){
        * We have the problem that the illegal move might be from a previous game.
        */
 	if(runData.engineMovesPlayed>0){
-	    logme(LOG_DEBUG,"Something bad happened. Bailing out.");
-	    SendToIcs("resign\n");
+	    if(runData.illegalMoveCount==0){
+		/* First "Illegal move": the engine's position may have
+		 * diverged (a missed board update, or a server-side
+		 * bookkeeping quirk such as a drop the server does not
+		 * credit).  Rather than lose the game, resync: the next
+		 * board update re-enters the first-board path, which sends
+		 * setboard (the full ICS position) plus go.  Only bail
+		 * (resign) if it fails a second time. */
+		runData.illegalMoveCount=1;
+		logme(LOG_INFO,
+		 "Illegal move reported; resyncing the engine from the ICS board.");
+		InterruptComputer();
+		runData.waitingForMoveList=FALSE;
+		runData.forceSetBoard=TRUE;
+		runData.waitingForFirstBoard=TRUE;
+	    }else{
+		logme(LOG_DEBUG,"Something bad happened. Bailing out.");
+		SendToIcs("resign\n");
+	    }
 	}else{
 	    logme(LOG_DEBUG,"Not bailing out since we are at the start of the game.");
 	}

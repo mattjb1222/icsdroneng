@@ -412,6 +412,7 @@ void ProcessComputerLine(char *line, char *queue)
       sscanf(line, "move %15s", move) == 1) {
     if (runData.gameID != -1) {
       runData.engineMovesPlayed++;
+      runData.illegalMoveCount=0;
       if((appData.feedback || appData.proxyFeedback) && validKibitzSeen){
 	PVFeedback();
       }

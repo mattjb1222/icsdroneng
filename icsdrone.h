@@ -264,6 +264,10 @@ typedef struct {
   char chessVariant[30+1];
   Bool noCastle;
   int engineMovesPlayed;
+  int illegalMoveCount; /* >0 after an "Illegal move" reply from the
+                        * server; the first one triggers a board
+                        * resync instead of an immediate resign (see
+                        * ProcessIllegalMove) */
   Bool isBughouse;
   char bughousePartner[30+1];
   /* Last move we sent to the ICS server.  Used to recognize echoes of our
