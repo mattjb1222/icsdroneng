@@ -669,6 +669,17 @@ void HandleBoard(IcsBoard * icsBoard, char *moveList, Bool ignoreMove){
     } else {
       strcpy(move, icsBoard->sanMove);
     }
+    /* FICS drop notation "Q/-h8" has no from-square; normalize it
+     * to "Qh8" so the engine recognizes it as a partner drop. */
+    if (strlen(move) == 5 && move[1] == '/'
+        && ((move[0] >= 'a' && move[0] <= 'z') || (move[0] >= 'A' && move[0] <= 'Z'))
+        && move[3] >= 'a' && move[3] <= 'h'
+        && move[4] >= '1' && move[4] <= '8') {
+      char norm[8];
+      sprintf(norm, "%c%c%c", toupper(move[0]), move[3], move[4]);
+      strcpy(move, norm);
+      logme(LOG_INFO, "Normalized drop notation: %s", norm);
+    }
     if(strcmp(move,"none") && !moveList && !ignoreMove){
       logme(LOG_INFO, "Move from ICS: %s %s", 
                      icsBoard->lanMove,icsBoard->sanMove);
@@ -685,7 +696,13 @@ void HandleBoard(IcsBoard * icsBoard, char *moveList, Bool ignoreMove){
       }
       SendToIcs("%s\n",bmove.move);
       SendMoveToComputer(bmove.move);
-    }else{
+    }
+    /* Xboard "go" means "it is your move now": send it only when
+     * this board says it is our turn (status 1).  Sending it on
+     * status-0 boards made the engine adopt the wrong turn color
+     * (deepBug) after it played, so it stopped moving until its
+     * clock ran out. */
+    if(runData.icsBoard.status == 1){
       Go();
     }
   }
@@ -1885,6 +1902,26 @@ Bool ProcessPTell(char *line){
       logme(LOG_DEBUG,"Forwarding ptell to engine: %s", msg);
     }else{
       logme(LOG_DEBUG,"Got ptell but not in a bughouse game; ignoring: %s", msg);
+    }
+    return TRUE;
+  }
+  /* FatICS also delivers partner commands as an "admin" prompt:
+   * "admin has issued the following command on your behalf: ptell X".
+   * Forward those too ("sitting" and "go" drive Sunsetter's
+   * sit-for-a-piece protocol).  When the partner sat, ask for a
+   * board as well: FatICS does not broadcast the board update that
+   * carries the dropped piece, so without the request the engine
+   * never learns of the drop and sits out until the clock runs out. */
+  if (sscanf(line, "admin has issued the following command on your behalf: ptell %8192[^\n\r]s", msg) == 1){
+    if (runData.isBughouse || runData.bughousePartner[0]){
+      SendToComputer("ptell %s\n", msg);
+      logme(LOG_INFO,"Forwarding admin-issued ptell to engine: %s", msg);
+      if (!strcmp(msg, "sitting") && runData.isBughouse && runData.inGame){
+        logme(LOG_INFO,"Partner sat; requesting board to learn the drop.");
+        SendToIcs("board\n");
+      }
+    }else{
+      logme(LOG_DEBUG,"Got admin ptell but not in a bughouse game; ignoring: %s", msg);
     }
     return TRUE;
   }
