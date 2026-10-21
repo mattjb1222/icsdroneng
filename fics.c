@@ -1880,11 +1880,23 @@ Bool ProcessBughouseHolding(char *line){
   if(!runData.loggedIn) return FALSE;
   if(!runData.inGame) return FALSE;
   if(!runData.isBughouse) return FALSE;
-  /* FatICS sends "holding [<white>] [<black>]" to the players of a
-   * bughouse board after each move.  Forward it to the engine so it
-   * knows what pieces it (and its opponent) can drop. */
+  /* FatICS (contract: same as Thief) sends "holding [<white>] [<black>]"
+   * to the players of a board, where <white> is what the board's
+   * white player may drop and <black> what its black player may
+   * drop.  A captured piece goes to the *linked* board's holding, so
+   * this report is the only source of truth for the hands.  Forward
+   * it with the first list = our droppable pieces (regardless of our
+   * color; the engine assigns the color) and the second list = the
+   * opponent's.  We only ever receive holding lines for our own
+   * board (the server sends each board's line to that board's
+   * players).  Use computerIsWhite (set from our board's first line;
+   * icsBoard itself is periodically overwritten by the partner
+   * board's line, so its player names are unreliable here). */
   if(sscanf(line, "holding %200s %200s", w, b) == 2){
-    SendToComputer("holding %s %s\n", w, b);
+    if(runData.computerIsWhite)
+      SendToComputer("holding %s %s\n", w, b);
+    else
+      SendToComputer("holding %s %s\n", b, w);
     logme(LOG_DEBUG,"Forwarding holding to engine: %s %s", w, b);
     return TRUE;
   }
