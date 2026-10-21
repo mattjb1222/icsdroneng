@@ -808,6 +808,16 @@ Bool IsFicsShuffle(char *icsvariant){
 
 Bool UseMoveList(){
     int ret;
+    if (runData.isBughouse) {
+	/* Bughouse: rely on board updates instead of a move list.
+	 * FatICS re-sends the full board (with last move) about
+	 * once per second, and when a rematch is started the old
+	 * game is still running - the "moves" reply is ambiguous
+	 * between the two and a stale list gets replayed into the
+	 * fresh game (desync). */
+	logme(LOG_INFO,"Bughouse: not using move lists; relying on board updates.\n");
+	return FALSE;
+    }
     ret=appData.useMoveList;
     if (!ret) {
 	logme(LOG_INFO,"Not using move lists; relying on board updates.\n");
@@ -1890,7 +1900,26 @@ Bool ProcessBoard(char *line){
   if(runData.icsBoard.status==1 /* my move */ || runData.icsBoard.status==-1 /* your move */){      icsBoardCopy.status=0; // observing
   }      
   BoardToString(runData.lineBoard, &icsBoardCopy);
-  if(!runData.inGame) return TRUE;
+  if(!runData.inGame){
+      /* Bughouse: a board for our board means the game is (still)
+       * live - e.g. we just processed a game result we could not
+       * validate (we never saw the "Creating" line, gameID==-1)
+       * and dropped inGame, or the "start of game" line was
+       * missed.  Re-arm and resync: the first-board path below
+       * resends setboard (forceSetBoard) + go, so the engine
+       * picks the game back up instead of idling on a running
+       * clock. */
+      if(runData.isBughouse && IsMyBoard(&runData.icsBoard)){
+	  logme(LOG_INFO, "Bughouse board while not in game; resuming and resyncing.");
+	  runData.inGame = TRUE;
+	  runData.engineMovesPlayed = 0;
+	  runData.waitingForFirstBoard = TRUE;
+	  runData.waitingForMoveList = FALSE;
+	  runData.forceSetBoard = TRUE;
+      } else {
+	  return TRUE;
+      }
+  }
   if(!IsMyBoard(&runData.icsBoard)) return TRUE;
   if(runData.icsBoard.status!=1 &&  runData.icsBoard.status!=-1){
       /* Bughouse: let FatICS's status-0 boards ("partner to move" and the
@@ -1919,9 +1948,10 @@ Bool ProcessBoard(char *line){
     if(!runData.useMoveList){
 	Bool ignoreStartBoard;
 	ignoreStartBoard=FALSE;
-	if(!IsShuffle(runData.chessVariant)){
+	if(!runData.forceSetBoard && !IsShuffle(runData.chessVariant)){
 	    ignoreStartBoard=TRUE;
 	}
+	runData.forceSetBoard=FALSE;
 	SendBoardToComputer(&runData.icsBoard,ignoreStartBoard);
 	SetupEngineOptions(&(runData.icsBoard));
 	HandleBoard(&(runData.icsBoard),NULL,TRUE);
@@ -1942,6 +1972,7 @@ Bool ProcessBoard(char *line){
 }
 
 Bool ProcessGameEnd(char *line){
+  int gameNum;
   char resultString[100+1];
   char result[30+1];
   char handle1[30];
@@ -1952,11 +1983,12 @@ Bool ProcessGameEnd(char *line){
    *  We dont care how the game ended, just that it ended.
    */
   memset(resultString,0,sizeof(resultString));
-  if(sscanf(line,"{Game %*d (%17s vs. %18s%*[ ]%100[^}]} %30s",
+  if(sscanf(line,"{Game %d (%17s vs. %18s%*[ ]%100[^}]} %30s",
+	    &gameNum,
 	    handle1,
 	    handle2,
 	    resultString,
-	    result)==4){
+	    result)==5){
     resultString[sizeof(resultString)-1]='\0';
     handle1[sizeof(handle1)-1]='\0';
     handle2[sizeof(handle2)-1]='\0';
@@ -1967,6 +1999,18 @@ Bool ProcessGameEnd(char *line){
        strncasecmp(handle2,runData.handle,strlen(runData.handle))){
 		       return TRUE;
        }		 
+    /* FatICS runs a rematch in parallel with the old game, so a
+     * result line for the *old* game (same players) can arrive
+     * after the new game has started.  If we are tracking a
+     * specific game (from the "Creating"/"Continuing" line) and
+     * this result names a different game, it is stale - ignore
+     * it: resetting here would drop the game that is actually
+     * in progress (the engine then idles and flags). */
+    if(runData.gameID >= 0 && gameNum >= 0 && gameNum != runData.gameID){
+        logme(LOG_INFO, "Ignoring stale game result (line names game %d, we are tracking %d): %s",
+              gameNum, runData.gameID, line);
+        return TRUE;
+    }
     logme(LOG_INFO, "Detected end of game: %s", line);
     {
         int mask=CONSOLE|SHORTLOG|PROXY;
@@ -2015,7 +2059,20 @@ Bool ProcessGameEnd(char *line){
     if (runData.haveCmdResult && !strcmp(result,"*")) {
       Result(result);
     }
-    NewGame();
+    if (runData.isBughouse) {
+	/* Bughouse: do NOT kill/restart the engine here.  It
+	 * supports several games in one process; killing it mid-
+	 * session loses all board state and, when a rematch
+	 * follows, the restarted engine has no position until a
+	 * brand-new "start of game" line - if we mis-processed
+	 * this result (stale, old game) the live engine just
+	 * idles while its clock runs and it flags.  A soft
+	 * reset is enough: the next game's setboard re-primes
+	 * it.  (Also covers a genuine game end - same path.) */
+	SendToComputer("new\n");
+    } else {
+      NewGame();
+    }
     return TRUE;
   }
   return FALSE;

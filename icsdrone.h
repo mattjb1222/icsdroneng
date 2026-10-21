@@ -253,6 +253,9 @@ typedef struct {
   int proxyLoginState;
   Bool hideFromProxy;
   Bool useMoveList;
+  Bool forceSetBoard; /* Bughouse resync: next first board must
+                          send a full setboard even though it is
+                          not a shuffle game */
   char icsVariant[30+1]; 
   int icsVariantCount;
   char icsVariants[MAXVARIANTS][2][30+1];
