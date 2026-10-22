@@ -581,6 +581,14 @@ Bool IsMyBoard(IcsBoard * icsBoard){
           !strcmp(icsBoard->nameOfBlack, runData.handle));
 }
 
+/* Is this board the bughouse partner's board (partner vs. the
+ * partner's opponent) instead of our own? */
+Bool IsPartnerBoard(IcsBoard * icsBoard){
+  return (runData.bughousePartner[0]
+      && (!strcmp(icsBoard->nameOfWhite, runData.bughousePartner) ||
+          !strcmp(icsBoard->nameOfBlack, runData.bughousePartner)));
+}
+
 /* Should this board's move and clocks be fed to the engine?
  * status -1 = our own last move (the engine already knows it).
  * status  1 = new move by the opponent (normal chess) or by our partner
@@ -1946,7 +1954,33 @@ Bool ProcessBoard(char *line){
   char *oppname;
   IcsBoard icsBoardCopy;
   if(!runData.loggedIn) return FALSE;
-  if(!ParseBoard(&(runData.icsBoard),line)) return FALSE;
+  /* Parse into a scratch copy first so that lines from boards that
+   * are not ours (notably the bughouse partner's board, which FatICS
+   * sends us on every move) do not clobber runData.icsBoard (it was
+   * "periodically overwritten by the partner board's line, so its
+   * player names are unreliable" - see ProcessBughouseHolding). */
+  { IcsBoard b;
+  if(!ParseBoard(&b,line)) return FALSE;
+  if(runData.isBughouse && runData.inGame && IsPartnerBoard(&b)){
+      /* FatICS re-sends the partner's board (with its clocks, in
+       * seconds) whenever either board moves.  Forward its clocks to
+       * the engine as "parntime <partner clock> <partner's opponent
+       * clock>" (1/100th seconds - the same meaning and units the
+       * partner's own "ptell time" carries) so the engine's
+       * canSitByClock() can see the partner board's time balance
+       * without the partner (often a human) having to ptell
+       * anything - and without ptell spam either way. */
+      int partnerClock = (!strcmp(b.nameOfWhite, runData.bughousePartner))
+                          ? b.whitetime : b.blacktime;
+      int partOppClock = (!strcmp(b.nameOfWhite, runData.bughousePartner))
+                          ? b.blacktime : b.whitetime;
+      SendToComputer("parntime %d %d\n", partnerClock*100, partOppClock*100);
+      logme(LOG_DEBUG, "Forwarding partner board clocks to engine: %d %d",
+            partnerClock, partOppClock);
+      return TRUE;
+  }
+  runData.icsBoard = b;
+  }
   memcpy(&icsBoardCopy,&runData.icsBoard,sizeof(IcsBoard));
   if(runData.icsBoard.status==1 /* my move */ || runData.icsBoard.status==-1 /* your move */){      icsBoardCopy.status=0; // observing
   }      
