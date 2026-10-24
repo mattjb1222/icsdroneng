@@ -1036,6 +1036,13 @@ Bool ProcessLogin(char *line){
     }
     runData.loggedIn=1;
     persistentData.wasLoggedIn=TRUE;
+    /* Opt in to FatICS's bughouse "holding [white] [black]" report
+     * (sent only when it changes).  That happens in the login command
+     * block in main.c: "iset bugholding 1" (an ivar; the default is
+     * off, so plain telnet/Thief sessions never see the lines).
+     * We need it: in bughouse a capture goes to the partner board's
+     * holding, so our own board's lines never show us what we may
+     * drop. */
 
     if(!appData.pgnFile){
       SetOption("pgnFile",LOGIN,0,"%s.pgn",runData.handle);
