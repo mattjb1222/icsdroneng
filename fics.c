@@ -1161,6 +1161,7 @@ Bool ProcessOffers(char *line){
   char name[30+1];
   char dummy;
   int mask;
+  int gameNum;
   if(!runData.loggedIn) return FALSE;
   /*
    *  Respond to offers
@@ -1201,6 +1202,19 @@ Bool ProcessOffers(char *line){
           logme(LOG_INFO, "Accepting partnership offer from %s.", name);
           SendToIcs("accept %s\n", name);
       }
+      return TRUE;
+  }
+  if (sscanf(line, "Your partner is playing game %d%c", &gameNum, &dummy) == 2) {
+      /* FatICS no longer force-feeds the partner board's lines to
+       * players (that breaks single-board clients like Winboard);
+       * instead observe the partner board (like Thief's auto-
+       * follow).  ProcessBoard() recognises those lines via
+       * IsPartnerBoard() and forwards their clocks to the engine
+       * as "parntime".  (The game exists already: the server
+       * creates both boards before sending this message.) */
+      Feedback(mask, "Your partner is playing game %d; observing it.", gameNum);
+      logme(LOG_INFO, "Observing bughouse partner game %d.", gameNum);
+      SendToIcs("observe %d\n", gameNum);
       return TRUE;
   }
   if (sscanf(line, "%30s would like to abor%c", name, &dummy) == 2) {
