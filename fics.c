@@ -1201,7 +1201,45 @@ Bool ProcessOffers(char *line){
       if (appData.acceptPartnership) {
           logme(LOG_INFO, "Accepting partnership offer from %s.", name);
           SendToIcs("accept %s\n", name);
+          /* Partnership confirmed (we just accepted it): tell the
+           * engine NOW (the engine is always running - started when
+           * icsdroneng logged in) - it ptells its usage 1 second
+           * after this (engine-side delay), i.e. 1 second after the
+           * partnership, not after the game starts */
+          SendToComputer("partnership %s\n", name);
       }
+      return TRUE;
+  }
+  /* FatICS changed the wording: when the offer is pre-/auto-accepted it
+   * sends "X agrees to be your partner" instead of "X offers to be your
+   * bughouse partner".  Remember the partner name so ProcessBoard() can
+   * recognise the partner board's lines (via IsPartnerBoard()) and forward
+   * their clocks to the engine as "parntime" (no "accept" - the
+   * partnership is already in place). */
+  if (sscanf(line, "%30s agrees to be your partner%c", name, &dummy) == 2) {
+      Feedback(mask, "Partnership confirmed with %s.", name);
+      logme(LOG_INFO, "Bughouse partner is %s (agrees).", name);
+      strncpy(runData.bughousePartner, name, sizeof(runData.bughousePartner)-1);
+      runData.bughousePartner[sizeof(runData.bughousePartner)-1]='\0';
+      /* Partnership confirmed: tell the engine NOW (it is always
+       * running; it ptells its usage 1 second after this, i.e. 1
+       * second after the partnership, not after the game starts) */
+      SendToComputer("partnership %s\n", name);
+      return TRUE;
+  }
+  /* Acceptor-side wording (we accepted - or the server auto-accepted
+   * to a bugopen player): "You agree to be X's partner."  The "X
+   * agrees to be your partner" above is what the OFFERER sees; when
+   * we are the acceptor (the usual bot case - the partner made the
+   * offer) the server says it to us this way.  Same confirmation.
+   * %29[^'] stops at the apostrophe (%s would swallow the possessive
+   * "'s" into the name). */
+  if (sscanf(line, "You agree to be %29[^']s's partner%c", name, &dummy) == 1) {
+      Feedback(mask, "Partnership confirmed with %s.", name);
+      logme(LOG_INFO, "Bughouse partner is %s (you agree).", name);
+      strncpy(runData.bughousePartner, name, sizeof(runData.bughousePartner)-1);
+      runData.bughousePartner[sizeof(runData.bughousePartner)-1]='\0';
+      SendToComputer("partnership %s\n", name);
       return TRUE;
   }
   if (sscanf(line, "Your partner is playing game %d%c", &gameNum, &dummy) == 2) {
