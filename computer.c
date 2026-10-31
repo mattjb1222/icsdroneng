@@ -152,10 +152,38 @@ void SendMovesToComputer(char *moveList){
   }  
 }
 
+static long sendTraceSeq = 0;
+
+/* Render runData.icsBoard in the engine's dump orientation (rank 8 at top,
+ * file a at left: icsBoard.board[file][rank]) so it can be diffed against
+ * the engine's board ("TRC APPLY ... board=...") after each move, to find
+ * the first move where the engine's board diverges from the server's.
+ * Uses '-' for empty (the engine uses '.'; normalize when comparing). */
+static void renderIcsBoard(char *out)
+{
+  int r, f, i = 0;
+  for (r = 7; r >= 0; r--)
+    {
+    for (f = 0; f < 8; f++)
+      out[i++] = runData.icsBoard.board[f][r];
+    out[i++] = '/';
+    }
+  out[i] = '\0';
+}
+
 void SendMoveToComputer(move_t move){
   struct timeval tv;
   gettimeofday(&tv,NULL);
   runData.timeOfLastMove=1000000*((long long)tv.tv_sec)+tv.tv_usec;
+  {
+    long seq = sendTraceSeq;
+    char bb[96];
+    renderIcsBoard(bb);
+    logme(LOG_INFO, "TRC SBOARD#%ld %s stm=%c", seq, bb,
+          (runData.icsBoard.onMove == 'w') ? 'W' : 'B');
+    logme(LOG_INFO, "TRC SEND#%ld %s", seq, move);
+    sendTraceSeq++;
+  }
   if(!runData.usermove){
     SendToComputer("%s\n",move);
   }else{

@@ -48,6 +48,11 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 /* Max line size of PGN file */
 #define MAX_PGN_FILE_LINE	80
 
+/* Forward declarations (defined later in this file; used in the board/move
+ * path above their definitions). */
+void FlushHoldingToEngine(void);
+int countHoldingPieces(char *s);
+
 
 
 void InternalIcsCommand(char *command){
@@ -641,6 +646,7 @@ void HandleBoard(IcsBoard * icsBoard, char *moveList, Bool ignoreMove){
   if(moveList){
     Force();
     SendMovesToComputer(moveList);
+    FlushHoldingToEngine();
   }
   if(ForwardBoard(icsBoard)){
     /* clear outstanding flag and abort alarms */
@@ -693,6 +699,9 @@ void HandleBoard(IcsBoard * icsBoard, char *moveList, Bool ignoreMove){
       logme(LOG_INFO, "Move from ICS: %s %s", 
                      icsBoard->lanMove,icsBoard->sanMove);
       SendMoveToComputer(move);
+      /* Deliver a buffered holding report (a drop) AFTER the move so the
+       * engine applies the drop before its hand is updated. */
+      FlushHoldingToEngine();
     }
     runData.waitingForFirstBoard=FALSE;
     if(strcmp(bmove.move,"none")){
@@ -714,6 +723,10 @@ void HandleBoard(IcsBoard * icsBoard, char *moveList, Bool ignoreMove){
     if(runData.icsBoard.status == 1){
       Go();
     }
+    /* Deliver any buffered holding report on this board update (which
+     * follows the move that caused it).  Idempotent (no-op if nothing
+     * is pending). */
+    FlushHoldingToEngine();
   }
 }
 
@@ -1859,6 +1872,13 @@ Bool ProcessStartOfGame(char *line){
     runData.waitingForFirstBoard = TRUE;
     runData.engineMovesPlayed=0;
     runData.illegalMoveCount=0;
+    /* Fresh game: the holding is empty and will be reported separately;
+     * clear the stored holding so a resync re-send (holdingKnown) cannot
+     * fire with a stale hand from the previous game. */
+    runData.holdingKnown = FALSE;
+    runData.holdingWhite[0]='\0';
+    runData.holdingBlack[0]='\0';
+    runData.holdingReportPending = FALSE;
     return TRUE;
   }
   /*
@@ -1941,6 +1961,35 @@ Bool ProcessMoveList(char *line){
     return FALSE;
 }
 
+/* Count the P/N/B/R/Q pieces (case-insensitive) in a holding list such as
+ * "PPBQ" or "P P B Q".  Used to detect whether a holding report removes
+ * pieces relative to the previous one (see ProcessBughouseHolding). */
+int countHoldingPieces(char *s){
+  int n = 0;
+  if(s) for(; *s; s++){
+    char c = toupper(*s);
+    if(c=='P'||c=='N'||c=='B'||c=='R'||c=='Q') n++;
+  }
+  return n;
+}
+
+/* Deliver a buffered holding report (holdingReportPending) to the engine,
+ * applying the white/black swap from computerIsWhite (mirroring
+ * ProcessBughouseHolding).  Called after the move that caused the holding
+ * change so the engine applies the move before the hand is updated.  Safe to
+ * call unconditionally (no-op unless a report is pending). */
+void FlushHoldingToEngine(void){
+  if(!runData.holdingReportPending) return;
+  runData.holdingReportPending = FALSE;
+  if(!runData.isBughouse || !runData.inGame) return;
+  if(runData.computerIsWhite)
+    SendToComputer("holding %s %s\n", runData.holdingWhite, runData.holdingBlack);
+  else
+    SendToComputer("holding %s %s\n", runData.holdingBlack, runData.holdingWhite);
+  logme(LOG_DEBUG,"Flushing buffered holding to engine: %s %s",
+        runData.holdingWhite, runData.holdingBlack);
+}
+
 Bool ProcessBughouseHolding(char *line){
   static char w[200+1];
   static char b[200+1];
@@ -1960,11 +2009,30 @@ Bool ProcessBughouseHolding(char *line){
    * icsBoard itself is periodically overwritten by the partner
    * board's line, so its player names are unreliable here). */
   if(sscanf(line, "holding %200s %200s", w, b) == 2){
-    if(runData.computerIsWhite)
-      SendToComputer("holding %s %s\n", w, b);
-    else
-      SendToComputer("holding %s %s\n", b, w);
-    logme(LOG_DEBUG,"Forwarding holding to engine: %s %s", w, b);
+    /* Detect whether this report REMOVES pieces (a drop) relative to the
+     * last one we hold.  FatICS can send the post-drop holding report
+     * BEFORE the drop move itself; forwarding it immediately makes the
+     * engine lose the piece from its hand before the drop is applied, so
+     * it rejects the drop as "Illegal move" (droneC 2026-10-29, Q@c7).
+     * Buffer a removal report (holdingReportPending) and deliver it after
+     * the move via FlushHoldingToEngine().  A pure increase (captures) is
+     * harmless and is forwarded immediately.  On the first report (or after
+     * a resync reset) the stored holding is empty, so no removal is
+     * detected and the report is forwarded immediately. */
+    int removal = (countHoldingPieces(w) < countHoldingPieces(runData.holdingWhite))
+             || (countHoldingPieces(b) < countHoldingPieces(runData.holdingBlack));
+    strcpy(runData.holdingWhite, w);
+    strcpy(runData.holdingBlack, b);
+    runData.holdingKnown = TRUE;
+    if(removal){
+      runData.holdingReportPending = TRUE;   /* buffer; flush after the move */
+    } else {
+      if(runData.computerIsWhite)
+        SendToComputer("holding %s %s\n", w, b);
+      else
+        SendToComputer("holding %s %s\n", b, w);
+      logme(LOG_DEBUG,"Forwarding holding to engine: %s %s", w, b);
+    }
     return TRUE;
   }
   return FALSE;
@@ -2097,6 +2165,22 @@ Bool ProcessBoard(char *line){
 	}
 	runData.forceSetBoard=FALSE;
 	SendBoardToComputer(&runData.icsBoard,ignoreStartBoard);
+	/* The setboard (BoardToFen) omits the holding, so it zeroes the
+	 * engine's holding.  Re-send the last reported holding to restore it
+	 * (a mid-game resync must not lose the hands).  Only when we have a
+	 * holding (i.e. a resync, not a fresh game start where the hands are
+	 * empty and will be reported separately). */
+	if(runData.isBughouse && runData.holdingKnown){
+	  if(runData.computerIsWhite)
+	    SendToComputer("holding %s %s\n", runData.holdingWhite, runData.holdingBlack);
+	  else
+	    SendToComputer("holding %s %s\n", runData.holdingBlack, runData.holdingWhite);
+	  logme(LOG_INFO,"Re-sent holding after resync setboard: %s %s",
+	         runData.holdingWhite, runData.holdingBlack);
+		/* The re-send above delivers any buffered (pending) holding report, so
+		 * clear the pending flag (it was for the pre-resync position). */
+		runData.holdingReportPending = FALSE;
+	}
 	SetupEngineOptions(&(runData.icsBoard));
 	/* Re-arm Go(): it only sends "go" when forceMode is set, and the
 	 * previous game's Go() already consumed it.  With the bughouse soft

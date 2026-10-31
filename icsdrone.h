@@ -270,6 +270,22 @@ typedef struct {
                         * ProcessIllegalMove) */
   Bool isBughouse;
   char bughousePartner[30+1];
+  /* Last holding the server reported ("holding <white> <black>").
+   * Stored so it can be re-sent to the engine after a resync setboard,
+   * which zeroes the engine's holding (BoardToFen omits the hand list).
+   * holdingWhite/holdingBlack are the SERVER's white/black holding (the
+   * raw report); the white/black swap on send is applied from
+   * computerIsWhite, mirroring ProcessBughouseHolding. */
+  char holdingWhite[200+1];
+  char holdingBlack[200+1];
+  Bool holdingKnown;
+  /* A holding report that REMOVES pieces (a drop) has been received but not
+   * yet delivered to the engine.  FatICS can send the post-drop holding
+   * report BEFORE the drop move itself; forwarding it immediately makes the
+   * engine lose the piece from its hand before the drop is applied, so it
+   * rejects the drop as "Illegal move".  Such a report is buffered here and
+   * delivered by FlushHoldingToEngine() after the move that caused it. */
+  Bool holdingReportPending;
   /* Last move we sent to the ICS server.  Used to recognize echoes of our
    * own moves on bughouse boards, which FatICS may mark with status 0
    * instead of -1.  Must not be re-fed to the engine. */
